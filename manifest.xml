@@ -1,0 +1,18 @@
+<package>
+  <description brief="reem_perception_launch">
+
+    Launch the perception system for the REEM robot.
+
+  </description>
+  <author>David Butterworth</author>
+  <license>BSD</license>
+  <review status="unreviewed" notes=""/>
+  <url>http://ros.org/wiki/reem_perception_launch</url>
+
+  <depend package="roscpp"/>
+  <depend package="reem_description"/>
+  <depend package="reem_arm_navigation"/>
+
+</package>
+
+

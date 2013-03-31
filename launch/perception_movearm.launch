@@ -1,0 +1,62 @@
+<launch>
+
+  <!-- 
+  Launch the perception & move_arm system for the REEM robot.
+
+  This allows you to scan the table with the OpenNI sensor, build a Collision Map,
+  then move the arm to specific poses.
+
+  ~~ David Butterworth
+     PAL Robotics S.L. 2013
+  -->
+
+
+  <arg name="sim" default="true"/>
+  <arg name="use_snapshotter" default="true" /> <!-- enable the PointCloud snapshotter -->
+
+
+  <!-- 
+  Launch Perception
+  -->
+
+  <include file="$(find reem_perception_launch)/launch/perception.launch">
+    <arg name="sim" value="$(arg sim)" />
+    <arg name="use_snapshotter" value="$(arg use_snapshotter)" />
+  </include>
+
+
+
+  <!-- 
+  This block is basically the launchfile from  'reem_arm_navigation/launch/reem_arm_navigation.launch'
+  which we can't call directly because it also tries to load perception stuff, which we already do above.
+  -->
+
+  <include file="$(find reem_arm_navigation)/launch/reem_planning_environment.launch" />
+  <include file="$(find reem_arm_navigation)/launch/environment_server.launch">
+    <arg name="use_monitor" value="true" />
+    <arg name="use_collision_map" value="true" />
+  </include>
+
+  <!-- don't launch perception here -->
+  <!-- <group if="$(arg use_rgbd_sensor)">
+    <include file="$(find reem_arm_navigation)/launch/perception.launch"/>
+  </group>-->
+
+  <include file="$(find reem_arm_navigation)/launch/constraint_aware_kinematics.launch" />
+  <include file="$(find reem_arm_navigation)/launch/ompl_planning.launch" />
+  <include file="$(find reem_arm_navigation)/launch/trajectory_filter_server.launch" />
+  <include file="$(find reem_arm_navigation)/launch/move_groups.launch" />
+
+
+
+  <!-- Head scan table Action Server -->
+  <!-- (must be launched in same namespace as desired follow_joint_trajectory action) -->
+
+  <group ns="head_traj_controller"> 
+    <node name="reem_scan_table_action" pkg="reem_head_scan_action" type="scan_snapshot_action_node" respawn="true" output="screen">
+      <remap from="snapshot_service" to="/xtion_snapshotter/snapshot"/>
+    </node>
+  </group>
+
+
+</launch>

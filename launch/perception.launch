@@ -1,0 +1,156 @@
+<launch>
+
+  <!-- 
+  Launch the perception system for the REEM robot.
+
+  This launch comprises 2 blocks:
+  - OpenNI
+  - PointCloud Snapshotter, Filter, OctoMap, Collision Map & Planning Scene
+
+  Can be easily used in simulation, or with the real robot.
+  Makes it easy to disable the snapshotter system and use a constant PointCloud feed.
+
+  In ROS Fuerte, the PR2 has launch files for perception in the arm_navigation
+  package, and elsewhere, but this may not be ideal.
+
+  ~~ David Butterworth
+     PAL Robotics S.L. 2013
+  -->
+
+
+  <arg name="sim" default="true"/>
+
+  <arg name="use_head_mount_rgbd" default="true" /> <!-- enable the head mounted ASUS Xtion Pro Live -->
+  <!--<arg name="use_head_mount_rgbd" value="$(optenv USE_RGBD_SENSOR false)" /> -->
+  <arg name="kinect_camera_name" default="head_mount_xtion" />
+  <arg name="kinect_frame_prefix" default="/head_mount_xtion" />
+
+  <arg name="use_snapshotter" default="true" /> <!-- enable the PointCloud snapshotter -->
+
+  <arg name="use_head_mount_stereo" default="false" /> <!-- un-used, to enable head mounted stereo cameras -->
+
+
+
+  <!-- 
+  REEM OpenNI launch
+
+  This launch can be split into separate files for the real or simulated robot.
+  -->
+
+  <!-- 
+
+  WARNING: 
+
+  THE OPENNI DRIVER THAT COMES WITH ROS FUERTE SEEMS TO BE RELIABLE.
+  HOWEVER, MANUALLY UPGRADING THE OPENNI DRIVER TO USE THE PRIMESENSE SENSOR CAN CAUSE RELIABILITY PROBLEMS.
+
+  OFTEN THE DRIVER DOES NOT INITIALIZE, WITH 3 DIFFERENT TYPES OF ERRORS.
+  YOU NEED TO MAKE A NODE THAT GETS LAUNCHED AT THE SAME TIME AS OPENNI & CHECKS IF THE POINTCLOUD IS PRODUCED,
+  OTHERWISE IT SHOULD RELAUNCH THE OPENNI.LAUNCH
+
+  -->
+
+  <!-- Simulated OpenNI -->
+  <!-- Launches nodelets to rectify the RGB image -->
+  <group if="$(arg sim)">
+    <!-- TODO: add special version of openni.launch file to process RGB, without processing PointCloud -->
+  </group>
+
+  <!-- Real OpenNI device -->
+  <!-- Load hardware driver, process PointCloud, rectify RGB image -->
+  <group unless="$(arg sim)">
+    <!-- Set driver configuration -->
+    <param name="/$(arg kinect_camera_name)/driver/data_skip" value="10" /> <!-- 10 will drop 9/10 frames ~ 2 Hz -->
+    <param name="/$(arg kinect_camera_name)/driver/image_mode" value="2" /> <!-- 2 = 640x480 VGA 30Hz, 5 = 320x240 -->
+    <param name="/$(arg kinect_camera_name)/driver/depth_mode" value="2" /> <!-- 2 = 640x480 VGA 30Hz, 5 = 320x240 -->
+
+    <include file="$(find openni_launch)/launch/openni.launch">
+      <arg name="device_id" value="#1" /> <!-- Use 1st device found, or you can specify first device on USB Bus #2 using 2@0 -->
+      <arg name="camera" value="$(arg kinect_camera_name)" /> <!-- topic namespace -->
+      <arg name="rgb_frame_id" value="$(arg kinect_frame_prefix)_rgb_optical_frame" />
+      <arg name="depth_frame_id" value="$(arg kinect_frame_prefix)_ir_optical_frame" /> <!-- default is {camera}_depth_optical_frame -->
+      <arg name="publish_tf" value="false"/> <!-- TF frames come from the robot model -->
+      <arg name="respawn" value="true"/>
+      <arg name="depth_registration" value="true"/>
+      <arg name="load_driver" value="true"/> <!-- load driver -->
+    </include>
+
+    <!-- Not tested yet, PR2 uses this kinect_monitor.py to check if Kinect has died -->
+    <!--<node pkg="pr2_object_manipulation_launch" type="kinect_monitor.py" name="kinect_monitor" >
+      <param name="kinect_node_name" value="openni_node1" />
+      <param name="grace_period" value="15" />
+      <remap from="camera_info" to="/$(arg kinect_camera_name)/rgb/camera_info" />
+    </node> -->
+
+  </group>
+
+
+
+  <!-- 
+  REEM Perception launch
+      
+  This loads the PointCloud snapshotter & filters, and OctoMap for the Collision Map.
+  A 'smart' trigger node is used to initialize the Collision Map.
+
+  This launch could be put in reem_arm_navigation/launch/perception.launch
+  -->
+
+  <group if="$(arg use_head_mount_rgbd)">
+
+    <!-- Load planning description parameters -->
+    <!-- Loads reem_planning_description.yaml
+         which contains joint groups & joints in collision -->
+    <include file="$(find reem_arm_navigation)/launch/reem_planning_environment.launch" />
+
+
+    <!-- PointCloud snapshotter for ASUS Xtion -->
+    <!-- you must also use the accompanying 'smart trigger' to initialize the Collision Map & Planning Scene -->
+    <group if="$(arg use_snapshotter)">
+      <node pkg="pointcloud_snapshotter" type="pointcloud_snapshotter" name="xtion_snapshotter" output="screen">
+        <remap from="point_cloud_in"  to="/$(arg kinect_camera_name)/depth_registered/points"/>
+        <remap from="point_cloud_out" to="/$(arg kinect_camera_name)/depth_registered/points_snapshot"/>
+        <param name="auto_start" value="true" /> <!-- Enable the snapshotter -->
+      </node>
+    </group>
+
+
+    <!-- Robot self filter (color) -->
+    <!-- removes the robot's own links from the PointCloud -->
+    <node pkg="robot_self_filter_color" type="self_filter_color" respawn="true" name="xtion_self_filter_color" output="screen">
+      <remap unless="$(arg use_snapshotter)" from="cloud_in" to="/$(arg kinect_camera_name)/depth_registered/points" /> <!-- default -->
+      <remap if="$(arg use_snapshotter)" from="cloud_in" to="/$(arg kinect_camera_name)/depth_registered/points_snapshot" /> <!-- for snapshotter -->
+      <remap from="cloud_out" to="/$(arg kinect_camera_name)/depth_registered/points_filtered_color" />     
+      <!-- The sensor frame from which to compute shadow points for filtering -->
+      <param name="sensor_frame" type="string" value="$(arg kinect_frame_prefix)_rgb_optical_frame" />
+      <!-- Resolution in cm for sub-sampling, prior to filtering. Was .02, PR is .005 -->
+      <param name="subsample_value" type="double" value=".01"/>
+      <!-- padding -->
+      <rosparam command="load" file="$(find reem_arm_navigation)/config/self_filter.yaml" /> 
+    </node>
+
+
+    <!-- OctoMap server -->
+    <!-- Replaces Collider, it builds both the ROS Collision Map & an Octomap  -->
+    <node pkg="octomap_server" type="octomap_server_node" name="octomap_server">  
+      <param name="frame_id" type="string" value="/base_footprint" /> <!-- Octomap uses odom_combined, but map is doing SLAM -->
+      <param name="resolution" type="double" value="0.025" />
+      <param name="sensor_model/max_range" type="double" value="2.5" /> <!-- was 1.5 -->
+      <remap from="cloud_in" to="/$(arg kinect_camera_name)/depth_registered/points_filtered_color" /> 
+      <remap from="collision_map_out" to="collision_map_occ" />
+    </node>
+
+
+    <!-- Initialize Collision Map & Planning Scene -->
+    <!-- if using the snapshotter, trigger it repeatedly until Collision Map is established -->
+    <group if="$(arg use_snapshotter)">
+      <node pkg="pointcloud_snapshotter" type="trigger_collision_map" name="trigger_collision_map" output="screen" >
+        <remap from="snapshot_service" to="/xtion_snapshotter/snapshot"/>
+        <remap from="collision_map_output" to="/collision_map_occ"/>
+      </node>
+    </group>
+
+  </group> <!-- endif use_head_mount_rgbd -->
+
+
+</launch>
+
